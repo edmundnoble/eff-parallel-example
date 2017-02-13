@@ -1,8 +1,10 @@
 import cats.implicits._
-
 import org.atnos.eff.{Eff, |=}
 import org.atnos.eff.all._
 import org.atnos.eff.future._
+
+import scala.concurrent.{ExecutionContext, Future, Promise}
+import scala.util.{Failure, Success}
 
 sealed trait Toy[A]
 final case class Getting(key: String)                extends Toy[Option[String]]
@@ -30,21 +32,17 @@ object Toy {
     xs.traverse(cycle[R])
 
   /** NEW */
-  def parGroupCycle[R : _toy : _Future](xs: List[String]): Eff[R, List[String]] = {
-    def futureCycle(x: String): Eff[R, String] =
-      futureAttempt[R, String](futureDelay[R, Eff[R, String]](cycle(x)).flatten)
-        .map(_.fold(
-          e => s"Cycle failed: ${e.getMessage}",
-          identity
-        ))
+  def parGroupCycle[R : _toy](xs: List[String])(implicit ec: ExecutionContext): Future[Eff[R, List[String]]] = {
+    def futureCycle(x: String): Future[Eff[R, String]] = {
+      val prom = Promise[Eff[R, String]]
+      Future(cycle(x)).onComplete {
+        case Success(a) => prom.success(a)
+        case Failure(e) => prom.success(Eff.pure(s"Cycle failed: ${e.getMessage}"))
+      }
+      prom.future
+    }
 
-    Eff.traverseA(xs)(futureCycle)
-  }
-
-    /** How can it be implemented without exposing Future to the whole stack */
-  def parGroupCycle2[R : _toy](xs: List[String]): Eff[R, List[String]] = {
-    val x = parGroupCycle
-    ???
+    Future.traverse(xs)(futureCycle).map(Eff.sequenceA(_))
   }
 }
  
